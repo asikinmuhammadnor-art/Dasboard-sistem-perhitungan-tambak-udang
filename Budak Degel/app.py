@@ -1,122 +1,172 @@
 import streamlit as st
 import pandas as pd
+import duckdb
 import plotly.express as px
+import os
+from dotenv import load_dotenv
 
 ##############################################
-# PAGE CONFIG
+# PAGE SETUP
 ##############################################
 st.set_page_config(
-    page_title="📟 Sistem Perhitungan Panen Udang",
-    layout="wide"
+    page_title="🦐 UMKM Udang Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("📟 Sistem Perhitungan Panen Udang")
-st.caption("Dashboard Analisis Panen Udang - Versi 1.0")
+st.title("🦐 AI-Powered Dashboard Panen Udang")
+st.caption("Prototype v1.0 - UMKM Shrimp Farming Analysis + AI Commentary")
 
 ##############################################
-# INPUT FORM
+# LOAD API KEY (Opsional Groq)
 ##############################################
-st.sidebar.header("📥 Input Parameter Budidaya")
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-jumlah_benur = st.sidebar.number_input("Jumlah Benur (ekor)", min_value=1, value=100000)
-total_pakan = st.sidebar.number_input("Total Pakan (kg)", min_value=1.0, value=2500.0)
-size_target = st.sidebar.number_input("Target Size (ekor/kg)", min_value=10, value=60)
-harga_jual = st.sidebar.number_input("Harga Jual per kg (Rp)", min_value=10000, value=65000)
-total_modal = st.sidebar.number_input("Total Modal Produksi (Rp)", min_value=10000, value=120000000)
-
-st.sidebar.markdown("---")
-
-##############################################
-# PERHITUNGAN OTOMATIS
-##############################################
-
-# Survival Rate (SR)
-sr = 0.80  # default SR
-
-jumlah_panen = jumlah_benur * sr
-estimasi_biomassa = jumlah_panen / size_target
-
-# FCR
-fcr = total_pakan / estimasi_biomassa
-
-# Harga total penjualan
-total_penjualan = estimasi_biomassa * harga_jual
-
-# Laba
-profit = total_penjualan - total_modal
-
-# Break Even Point
-bep_kg = total_modal / harga_jual
+if GROQ_API_KEY:
+    from groq import Groq
+    client = Groq(api_key=GROQ_API_KEY)
+else:
+    client = None
 
 ##############################################
-# OUTPUT TABEL HASIL
+# AI COMMENTARY
 ##############################################
-st.subheader("📊 Hasil Perhitungan Panen Udang")
+def generate_ai_commentary(data: pd.DataFrame) -> str:
+    if not client:
+        return "⚠️ AI Commentary tidak aktif (API Key tidak ditemukan)."
 
-hasil_df = pd.DataFrame({
-    "Parameter": [
-        "Jumlah Benur Awal",
-        "Survival Rate (SR)",
-        "Jumlah Udang Panen (ekor)",
-        "Target Size (ekor/kg)",
-        "Estimasi Biomassa (kg)",
-        "Total Pakan (kg)",
-        "FCR",
-        "Harga Jual per kg (Rp)",
-        "Total Penjualan (Rp)",
-        "Total Modal (Rp)",
-        "Laba (Rp)",
-        "Break Even Point (kg)"
-    ],
-    "Hasil": [
-        jumlah_benur,
-        f"{sr*100:.1f}%",
-        int(jumlah_panen),
-        size_target,
-        f"{estimasi_biomassa:.2f}",
-        total_pakan,
-        f"{fcr:.2f}",
-        harga_jual,
-        f"{total_penjualan:,.0f}",
-        f"{total_modal:,.0f}",
-        f"{profit:,.0f}",
-        f"{bep_kg:.2f}"
-    ]
-})
+    text_summary = data.to_string(index=False)
 
-st.dataframe(hasil_df, use_container_width=True)
+    prompt = f"""
+    Berikut adalah data hasil perhitungan panen udang:
+    {text_summary}
+
+    Buat analisis yang singkat dalam bahasa Indonesia:
+    - Estimasi panen dan hasil yang menonjol
+    - Efisiensi pakan
+    - Profitabilitas UMKM
+    - Risiko dan perhatian budidaya
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        return response.choices[0].message.content
+
+    except Exception as e:
+        return f"❌ Error AI Commentary: {e}"
 
 ##############################################
-# CHART
+# DATA UPLOAD
 ##############################################
-st.subheader("📈 Grafik Estimasi Biomassa vs FCR")
+uploaded_file = st.file_uploader("📂 Upload file input budidaya udang", type=["xlsx", "xls", "csv"])
 
-chart_df = pd.DataFrame({
-    "Parameter": ["Biomassa (kg)", "FCR"],
-    "Value": [estimasi_biomassa, fcr]
-})
+if uploaded_file:
 
-fig = px.bar(chart_df, x="Parameter", y="Value",
-             title="Grafik Biomassa & FCR Udang",
-             text_auto=True)
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
 
-st.plotly_chart(fig, use_container_width=True)
+    st.subheader("📜 Data Input Budidaya")
+    st.dataframe(df.head())
 
-##############################################
-# ANALISIS SINGKAT
-##############################################
-st.subheader("📝 Analisis Otomatis")
+    # PASTIKAN KOLUMNYA ADA
+    required_cols = ["Jumlah_Benur", "Total_Pakan_kg", "Size_Target_gr", "Harga_Jual_perkg", "Modal_Total"]
 
-analisis = f"""
-### 🔍 Ringkasan Analisis:
-- Dengan **{jumlah_benur:,} benur** dan SR **{sr*100:.1f}%**, estimasi jumlah panen adalah **{int(jumlah_panen):,} ekor**.
-- Dengan target size **{size_target} ekor/kg**, estimasi biomassa: **{estimasi_biomassa:.2f} kg**.
-- FCR sebesar **{fcr:.2f}**, ini termasuk kategori **{'baik' if fcr < 1.5 else 'sedang' if fcr <= 1.8 else 'kurang efisien'}**.
-- Perkiraan pendapatan: **Rp {total_penjualan:,.0f}**
-- Total modal: **Rp {total_modal:,.0f}**
-- 👉 **Laba bersih: Rp {profit:,.0f}**
-- Titik impas tercapai di **{bep_kg:.2f} kg** produksi.
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"⚠️ File harus memiliki kolom: {required_cols}")
+        st.stop()
 
-"""
+    ##############################################
+    # PERHITUNGAN PANEN
+    ##############################################
+    st.subheader("🧮 Perhitungan Panen Udang")
 
-st.markdown(analisis)
+    df["Perkiraan_Ekor_Panen"] = df["Jumlah_Benur"] * 0.85    # survival rate 85%
+    df["Berat_per_ekor_kg"] = df["Size_Target_gr"] / 1000
+    df["Total_Panen_kg"] = df["Perkiraan_Ekor_Panen"] * df["Berat_per_ekor_kg"]
+    df["Omzet"] = df["Total_Panen_kg"] * df["Harga_Jual_perkg"]
+    df["Profit"] = df["Omzet"] - df["Modal_Total"]
+
+    st.dataframe(df)
+
+    ##############################################
+    # VISUALISASI
+    ##############################################
+    st.subheader("📊 Grafik Total Panen & Profit")
+
+    fig = px.bar(
+        df,
+        x=df.index,
+        y=["Total_Panen_kg", "Profit"],
+        barmode="group",
+        title="Total Panen (kg) dan Profit"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    ##############################################
+    # AUTO COMMENTARY
+    ##############################################
+    st.subheader("📝 Auto Commentary (Rule-based)")
+
+    best_profit = df["Profit"].max()
+    worst_profit = df["Profit"].min()
+
+    commentary = f"""
+    🔍 **Analisis Otomatis:**
+    - Profit tertinggi: **Rp {best_profit:,.0f}**
+    - Profit terendah: **Rp {worst_profit:,.0f}**
+    - Total panen rata-rata: **{df["Total_Panen_kg"].mean():,.2f} kg**
+    """
+
+    st.markdown(commentary)
+
+    ##############################################
+    # AI COMMENTARY
+    ##############################################
+    st.subheader("🤖 AI Commentary")
+
+    ai_comment = generate_ai_commentary(df)
+    st.write(ai_comment)
+
+    ##############################################
+    # CHAT MODE
+    ##############################################
+    st.subheader("💬 Tanya AI Analis Udang")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = [
+            {"role": "system", "content": "Anda adalah ahli analisis budidaya udang."},
+            {"role": "assistant", "content": ai_comment}
+        ]
+
+    for msg in st.session_state.chat_history:
+        st.chat_message(msg["role"]).write(msg["content"])
+
+    if question := st.chat_input("Tanyakan sesuatu..."):
+        st.session_state.chat_history.append({"role": "user", "content": question})
+        st.chat_message("user").write(question)
+
+        if client:
+            try:
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=st.session_state.chat_history,
+                    temperature=0.7
+                )
+                answer = response.choices[0].message.content
+                st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                st.chat_message("assistant").write(answer)
+            except Exception as e:
+                st.error(f"❌ Error chat: {e}")
+        else:
+            st.chat_message("assistant").write("⚠️ AI Chat tidak aktif (API Key tidak ada).")
+
+else:
+    st.info("⬆️ Upload Excel/CSV untuk memulai.")
